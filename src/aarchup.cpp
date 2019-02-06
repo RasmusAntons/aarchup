@@ -63,6 +63,8 @@ int print_help() {
          "--timeout works or without --loop-time [value].\n"
          "                                      The value for this option "
          "should be in minutes.\n"
+         "          --update-command <command>  Add a button to the"
+         "notification that triggers this command.\n"
          "\nMore information can be found in the manpage.\n";
   exit(0);
 }
@@ -89,10 +91,23 @@ std::vector<std::string> split(const std::string &s, char delimiter) {
   return tokens;
 }
 
+void update_callback(NotifyNotification *notification, char *action, gpointer user_data)
+{
+    LOGV << "update_callback";
+    system((char *) user_data);
+}
+
+void close_callback(NotifyNotification *notification, gpointer user_data)
+{
+    LOGV << "close_callback";
+    g_main_loop_quit((GMainLoop *) user_data);
+}
+
 int main(int argc, char **argv) {
   NotifyUrgency urgency = NOTIFY_URGENCY_NORMAL;
   const char *command = "/usr/bin/checkupdates";
   const char *aurCommand = "/usr/bin/auracle sync";
+  GMainLoop *loop;
 
   long timeout = 3600 * 1000;
   long max_number_out = 30;
@@ -103,6 +118,7 @@ int main(int argc, char **argv) {
   static int help_flag = 0;
   static int version_flag = 0;
   static int aur = 0;
+  char *update_command = NULL;
 
   plog::ConsoleAppender<plog::TxtFormatter> consoleAppender;
   plog::init(plog::warning, &consoleAppender);
@@ -129,6 +145,7 @@ int main(int argc, char **argv) {
       {"aur", no_argument, &aur, 1},
       {"ftimeout", required_argument, nullptr, 'f'},
       {"debug", no_argument, nullptr, 'd'},
+      {"update-command", required_argument, 0, 'a'},
       {nullptr, 0, nullptr, 0},
   };
 
@@ -233,6 +250,9 @@ int main(int argc, char **argv) {
         }
         LOGV << "Manual_timeout: " << manual_timeout / 60 << " min(s)";
         break;
+      case 'a':
+        update_command = optarg;
+        break;
       case 'h':
       case '?':
         print_help();
@@ -281,10 +301,15 @@ int main(int argc, char **argv) {
       }
       bool persist = TRUE;
       gboolean success;
+      loop = g_main_loop_new(NULL, FALSE);
       do {
         if (!my_notify) {
           my_notify = notify_notification_new(
               "New updates for Arch Linux available!", ss.str().c_str(), icon);
+          if (update_command != NULL) {
+            notify_notification_add_action(my_notify, "default", "Update", NOTIFY_ACTION_CALLBACK(update_callback), update_command, NULL);
+            g_signal_connect(my_notify, "closed", (GCallback) close_callback, loop);
+          }
         } else {
           notify_notification_update(my_notify,
                                      "New updates for Arch Linux available!",
@@ -316,6 +341,10 @@ int main(int argc, char **argv) {
           }
         }
       } while (!my_notify);
+      if (success && update_command != NULL) {
+        g_main_loop_run (loop);
+      }
+      g_main_loop_unref(loop);
       if (error) {
         g_error_free(error);
         error = nullptr;
